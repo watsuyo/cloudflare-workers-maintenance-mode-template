@@ -1,32 +1,53 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
-
 export interface Env {
-	// Example binding to KV. Learn more at https://developers.cloudflare.com/workers/runtime-apis/kv/
-	// MY_KV_NAMESPACE: KVNamespace;
-	//
-	// Example binding to Durable Object. Learn more at https://developers.cloudflare.com/workers/runtime-apis/durable-objects/
-	// MY_DURABLE_OBJECT: DurableObjectNamespace;
-	//
-	// Example binding to R2. Learn more at https://developers.cloudflare.com/workers/runtime-apis/r2/
-	// MY_BUCKET: R2Bucket;
-	//
-	// Example binding to a Service. Learn more at https://developers.cloudflare.com/workers/runtime-apis/service-bindings/
-	// MY_SERVICE: Fetcher;
-	//
-	// Example binding to a Queue. Learn more at https://developers.cloudflare.com/queues/javascript-apis/
-	// MY_QUEUE: Queue;
+	YOUR_BUCKET_NAMESPACE: R2Bucket;
+	YOUR_KV_NAMESPACE: KVNamespace;
 }
 
+const customResponse = (message = 'Under maintenance.') => {
+	return new Response(message);
+};
+
+const isIPAddressInRanges = (ipAddress: string, ipRanges: string[]) => {
+	const ipAddressBytes = ipAddress.split('.').map(Number);
+	return ipRanges.some((ipRange) => {
+		const [startIP, endIP] = ipRange.split('-');
+		const startBytes = startIP.split('.').map(Number);
+		const endBytes = endIP.split('.').map(Number);
+
+		return (
+			ipAddressBytes.slice(0, 3).every((byte, index) => byte === startBytes[index]) &&
+			ipAddressBytes[3] >= startBytes[3] &&
+			ipAddressBytes[3] <= endBytes[3]
+		);
+	});
+};
+
 export default {
-	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-		return new Response('Hello World!');
+	async fetch(request: Request, env: Env): Promise<Response> {
+		try {
+			const whiteList = await env.YOUR_KV_NAMESPACE.get('whiteList');
+			const ipRanges = whiteList?.split(',');
+
+			const clientIP = request.headers.get('CF-Connecting-IP');
+			const isAllowed = clientIP && ipRanges ? isIPAddressInRanges(clientIP, ipRanges) : false;
+
+			if (isAllowed) {
+				return await fetch(request);
+			} else {
+				try {
+					const object = await env.YOUR_BUCKET_NAMESPACE.get('index.html');
+					if (object === null) {
+						return customResponse();
+					}
+					return new Response(object.body);
+				} catch (error) {
+					console.error(error);
+					return customResponse();
+				}
+			}
+		} catch (error) {
+			console.error(error);
+			return customResponse();
+		}
 	},
 };
